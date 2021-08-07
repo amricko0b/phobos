@@ -1,22 +1,27 @@
 ThisBuild / name := "phobos"
 
-ThisBuild / scalaVersion := "2.13.6"
+ThisBuild / scalaVersion := "3.0.0"
 
-lazy val supportedVersions = List("2.12.14", "2.13.6")
+lazy val supportedVersions = List("2.12.14", "2.13.6", "3.0.0")
 
 lazy val commonDependencies =
-  libraryDependencies ++= List(
-    "com.fasterxml"  % "aalto-xml"     % "1.3.0",
-    "org.scala-lang" % "scala-reflect" % scalaVersion.value,
-    "org.scalatest" %% "scalatest"     % "3.2.9" % "test",
-    "org.scalactic" %% "scalactic"     % "3.2.9" % "test",
-  )
+  libraryDependencies ++=
+    List(
+      "com.fasterxml"  % "aalto-xml" % "1.3.0",
+      "org.scalatest" %% "scalatest" % "3.2.9" % "test",
+      "org.scalactic" %% "scalactic" % "3.2.9" % "test",
+    ) ++
+      (CrossVersion.partialVersion(scalaVersion.value) match {
+        case Some((2, _)) => List("org.scala-lang" % "scala-reflect" % scalaVersion.value)
+        case _            => Nil
+      })
 
-def onScalaVersion[B](`on-2-12`: => B, `on-2-13`: => B): Def.Initialize[B] =
+def onScalaVersion[B](`on-2-12`: => B, `on-2-13`: => B, `on-3-0`: => B): Def.Initialize[B] =
   Def.setting {
     CrossVersion.partialVersion(scalaVersion.value) match {
+      case Some((2, 12)) => `on-2-12`
       case Some((2, 13)) => `on-2-13`
-      case _             => `on-2-12`
+      case _             => `on-3-0`
     }
   }
 
@@ -29,11 +34,13 @@ def configuration(id: String)(project: Project): Project =
     scalacOptions ++= List(
       "-language:experimental.macros",
     ) ++ onScalaVersion(
+      `on-3-0` = Nil,
       `on-2-13` = Nil,
       `on-2-12` = List("-Ypartial-unification"),
     ).value,
     libraryDependencies ++= {
       onScalaVersion(
+        `on-3-0` = Nil,
         `on-2-13` = Nil,
         `on-2-12` = List(compilerPlugin("org.scalamacros" % "paradise" % "2.1.1" cross CrossVersion.patch)),
       ).value
