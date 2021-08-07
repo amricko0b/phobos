@@ -1083,7 +1083,7 @@ class DecoderDerivationSuit extends AnyWordSpec with Matchers {
       )
 
       implicit val fooDecoder: ElementDecoder[Foo] = deriveElementDecoder
-      implicit val xmlDecoder: XmlDecoder[Bar]     = deriveXmlDecoder("bar", tkf)
+      implicit val xmlDecoder: XmlDecoder[Bar]     = deriveXmlDecoder("bar")
 
       val bar     = Bar("d value", Foo(1, "b value", 3.0), 'e')
       val string  = """<?xml version='1.0' encoding='UTF-8'?>

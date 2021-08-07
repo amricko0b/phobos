@@ -910,17 +910,15 @@ class EncoderDerivationSuit extends AnyWordSpec with Matchers {
       implicit val tkfNs: Namespace[tkf.type] = Namespace.mkInstance("tinkoff.ru")
 
       val defaultNamespaceConfig = ElementCodecConfig.default.withElementsDefaultNamespace(tkf)
-      println(defaultNamespaceConfig)
+
       case class Foo(a: Int, b: String, c: Double)
       case class Bar(@attr d: String, foo: Foo, e: Char)
 
       implicit val fooEncoder: ElementEncoder[Foo] = deriveElementEncoder
-      implicit val xmlEncoder: XmlEncoder[Bar]     = deriveXmlEncoderConfigured("bar", defaultNamespaceConfig)
+      implicit val xmlEncoder: XmlEncoder[Bar]     = deriveXmlEncoderConfigured("bar", tkf, defaultNamespaceConfig)
 
       val bar    = Bar("d value", Foo(1, "b value", 3.0), 'e')
       val string = XmlEncoder[Bar].encode(bar)
-
-      println(string)
 
       assert(
         string ==
@@ -949,7 +947,7 @@ class EncoderDerivationSuit extends AnyWordSpec with Matchers {
       case class Bar(@attr d: String, @xmlns(tcs) foo: Foo, e: Char)
 
       implicit val fooEncoder: ElementEncoder[Foo] = deriveElementEncoder
-      implicit val xmlEncoder: XmlEncoder[Bar]     = deriveXmlEncoderConfigured("bar", defaultNamespaceConfig)
+      implicit val xmlEncoder: XmlEncoder[Bar]     = deriveXmlEncoderConfigured("bar", tkf, defaultNamespaceConfig)
 
       val bar    = Bar("d value", Foo(1, "b value", 3.0), 'e')
       val string = XmlEncoder[Bar].encode(bar)
@@ -978,7 +976,7 @@ class EncoderDerivationSuit extends AnyWordSpec with Matchers {
       case class Bar(@attr d: String, foo: Foo, @attr e: Char)
 
       implicit val fooEncoder: ElementEncoder[Foo] = deriveElementEncoder
-      implicit val xmlEncoder: XmlEncoder[Bar]     = deriveXmlEncoderConfigured("bar", defaultNamespaceConfig)
+      implicit val xmlEncoder: XmlEncoder[Bar]     = deriveXmlEncoderConfigured("bar", tkf, defaultNamespaceConfig)
 
       val bar    = Bar("d value", Foo(1, "b value", 3.0), 'e')
       val string = XmlEncoder[Bar].encode(bar)
