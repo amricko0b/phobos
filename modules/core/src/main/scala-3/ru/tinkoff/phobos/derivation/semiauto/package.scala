@@ -2,10 +2,13 @@ package ru.tinkoff.phobos.derivation
 
 import ru.tinkoff.phobos.configured.ElementCodecConfig
 import ru.tinkoff.phobos.decoding.{ElementDecoder, XmlDecoder}
+import ru.tinkoff.phobos.derivation.encoder.deriveElementEncoderMirror
 import ru.tinkoff.phobos.encoding.{ElementEncoder, XmlEncoder}
 
+import scala.deriving.Mirror
+
 package object semiauto {
-  def deriveElementEncoder[T]: ElementEncoder[T]                                                              = ???
+  inline def deriveElementEncoder[T](using Mirror.Of[T]): ElementEncoder[T]                                                              = deriveElementEncoderMirror[T]
   def deriveElementEncoderConfigured[T](config: ElementCodecConfig): ElementEncoder[T]                        = ???
   def deriveXmlEncoder[T](localName: String): XmlEncoder[T]                                                   = ???
   def deriveXmlEncoderConfigured[T](localName: String, config: ElementCodecConfig): XmlEncoder[T]             = ???
