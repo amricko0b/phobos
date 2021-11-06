@@ -38,7 +38,7 @@ object encoder {
                                        subtypeType: String,
                                      )
 
-  def paramAnnsI[T: Type](config: Expr[ElementCodecConfig])(using Quotes): List[CaseClassParam] = {
+  def paramAnns[T: Type](config: Expr[ElementCodecConfig])(using Quotes): List[CaseClassParam] = {
     import quotes.reflect.*
 
     val tpe = TypeRepr.of[T]
@@ -49,15 +49,7 @@ object encoder {
 
     tpe.typeSymbol.primaryConstructor.paramSymss.flatten.map { field =>
       val anns = field.annotations.filter(filterAnnotation).map(_.asExpr)
-      val namespace: Expr[Option[String]]  =
-        anns.collect {
-          case '{xmlns($a: b)} =>
-          '{Some(summonInline[Namespace[b]].getNamespace)}
-        } match {
-          case Nil => '{None}
-          case List(ns) => ns
-          case _ => throw new IllegalArgumentException("OOPPS")
-        }
+
       val cat: ParamCategory  = anns
         .collect {
           case '{attr()} => ParamCategory.attribute
@@ -68,22 +60,40 @@ object encoder {
         case Nil            => ParamCategory.element
         case categories => throw new IllegalArgumentException("BRRR")
       }
-      val xmlName = cat match {
-        case ParamCategory.element => '{${config}.transformElementNames(${Expr(field.name)})}
-        case ParamCategory.attribute => '{${config}.transformAttributeNames(${Expr(field.name)})}
-        case ParamCategory.text =>    Expr(field.name)
-        case ParamCategory.default => Expr(field.name)
-      }
+
+      val xmlName = (anns.collect {case '{renamed($a)} => a } match {
+        case Nil => None
+        case List(name) => Some(name)
+        case _ => throw new IllegalArgumentException("SHEESH")
+      }).getOrElse(cat match {
+          case ParamCategory.element => '{${config}.transformElementNames(${Expr(field.name)})}
+          case ParamCategory.attribute => '{${config}.transformAttributeNames(${Expr(field.name)})}
+          case _ =>    Expr(field.name)
+        })
+
+      val namespace: Expr[Option[String]]  =
+        anns.collect {
+          case '{xmlns($a: b)} =>
+          '{Some(summonInline[Namespace[b]].getNamespace)}
+        } match {
+          case Nil =>  cat match {
+            case ParamCategory.element => '{${config}.elementsDefaultNamespace}
+            case ParamCategory.attribute => '{${config}.attributesDefaultNamespace}
+            case _ => '{None}
+          }
+          case List(ns) => ns
+          case _ => throw new IllegalArgumentException("OOPPS")
+        }
       CaseClassParam()(field.name, xmlName, namespace, tpe.memberType(field), cat)
     }
   }
 
-  inline def peka[T](inline config: ElementCodecConfig): ElementEncoder[T] = ${pekaImpl('{config})}
+  inline def deriveProduct[T](inline config: ElementCodecConfig): ElementEncoder[T] = ${deriveProductImpl('{config})}
 
-  def pekaImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+  def deriveProductImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
     import quotes.reflect.*
     val tpe = TypeRepr.of[T]
-    val params = paramAnnsI[T](config)
+    val params = paramAnns[T](config)
 
     val groups = params.groupBy(_.category)
 
@@ -137,12 +147,72 @@ object encoder {
         sw.writeEndElement()
       }
     }}
-    println(x.asTerm.show(using Printer.TreeAnsiCode))
+//    println(x.asTerm.show(using Printer.TreeAnsiCode))
     x
   }
 
-  inline def xml[T](inline localName: String, inline config: ElementCodecConfig): XmlEncoder[T] = ${xmlImpl('{localName}, '{config})}
+  def deriveSumImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+    import quotes.reflect.*
 
-  def xmlImpl[T: Type](localName: Expr[String], config: Expr[ElementCodecConfig])(using Quotes): Expr[XmlEncoder[T]] =
-    '{XmlEncoder.fromElementEncoder[T]($localName)(${pekaImpl[T](config)})}
+    val tpe = TypeRepr.of[T]
+    val typeSymbol = tpe.typeSymbol
+
+    println(typeSymbol.children)
+
+    val alternatives = typeSymbol.children.map { child =>
+      tpe.select(child).asType match {
+        case '[t] =>
+          println('{??? match {
+            case x if x.isInstanceOf[t] => 123
+            case _ => 345
+          }}.asTerm.show(using Printer.TreeStructure))
+//          CaseDef(???, None, '{summonInline[ElementEncoder[t]]})
+      }
+    }
+
+//    println('{1 match {
+//      case 2 => 0
+//      case _: Int => 1
+//    }}.asTerm.show(using Printer.TreeStructure))
+
+    '{
+      new ElementEncoder[T] {
+        def encodeAsElement(a: T, sw: PhobosStreamWriter, localName: String, namespaceUri: Option[String]): Unit = {
+          ${Match('{a}.asTerm, Nil).asExprOf[Unit]}
+        }
+      }
+    }
+  }
+
+  inline def deriveEncoder[T](inline config: ElementCodecConfig): ElementEncoder[T] =
+    ${deriveEncoderImpl('{config})}
+
+  def deriveEncoderImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+    import quotes.reflect.*
+
+    val tpe = TypeRepr.of[T]
+    val typeSymbol = tpe.typeSymbol
+    if (typeSymbol.flags.is(Flags.Case)) {
+      deriveProductImpl(config)
+    } else if (typeSymbol.flags.is(Flags.Sealed)) {
+      deriveSumImpl(config)
+    } else {
+      println(typeSymbol.flags.show)
+      throw new IllegalArgumentException("А это кто")
+    }
+  }
+
+  inline def xml[T](
+    inline localName: String,
+    inline namespace: Option[String],
+    inline config: ElementCodecConfig
+  ): XmlEncoder[T] =
+    ${xmlImpl('{localName}, '{namespace}, '{config})}
+
+  def xmlImpl[T: Type](
+    localName: Expr[String],
+    namespace: Expr[Option[String]],
+    config: Expr[ElementCodecConfig],
+  )(using Quotes): Expr[XmlEncoder[T]] =
+    '{XmlEncoder.fromElementEncoder[T]($localName, $namespace)(${deriveEncoderImpl(config)})}
 }

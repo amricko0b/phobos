@@ -1085,13 +1085,12 @@ class EncoderDerivationSuit extends AnyWordSpec with Matchers {
 
       val bar    = Bar(Foo(1, "b value", 3.0))
       val string = XmlEncoder[Bar].encode(bar)
-      // \u0020 - space, for .minimize to work correctly
       assert(
         string ==
           """<?xml version='1.0' encoding='UTF-8'?>
           | <ans1:bar xmlns:ans1="tinkoff.ru">
-          |   <ans2:foo xmlns:ans2="tcsbank.ru" xmlns:ans3="example.com/3" xmlns:ans4="example.com/4"\u0020
-          |             xmlns:ans5="example.com/5" xmlns:ans6="example.com/6" xmlns:ans7="example.com/7"\u0020
+          |   <ans2:foo xmlns:ans2="tcsbank.ru" xmlns:ans3="example.com/3" xmlns:ans4="example.com/4" 
+          |             xmlns:ans5="example.com/5" xmlns:ans6="example.com/6" xmlns:ans7="example.com/7" 
           |             xmlns:ans8="example.com/8" xmlns:ans9="example.com/9" xmlns:ans10="example.com/10">
           |     <a>1</a>
           |     <b>b value</b>
