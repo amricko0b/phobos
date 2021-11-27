@@ -13,11 +13,13 @@ object SealedClasses {
   case class Foo1(a: String) extends Foo
   case class Foo2(b: Int)    extends Foo
   case class Foo3(c: Double) extends Foo
+  case class Yoba(foo1: Foo1)
 
   object Foo {
     implicit val foo1Encoder: ElementEncoder[Foo1] = deriveElementEncoder
     implicit val foo2Encoder: ElementEncoder[Foo2] = deriveElementEncoder
     implicit val foo3Encoder: ElementEncoder[Foo3] = deriveElementEncoder
+    implicit val yobaEncoder: ElementEncoder[Yoba] = deriveElementEncoder
     implicit val fooEncoder: ElementEncoder[Foo]   = deriveElementEncoder
     implicit val foo1Decoder: ElementDecoder[Foo1] = deriveElementDecoder
     implicit val foo2Decoder: ElementDecoder[Foo2] = deriveElementDecoder

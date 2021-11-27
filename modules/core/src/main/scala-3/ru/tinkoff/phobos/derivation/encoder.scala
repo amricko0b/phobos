@@ -3,16 +3,13 @@ package ru.tinkoff.phobos.derivation
 import ru.tinkoff.phobos.Namespace
 import ru.tinkoff.phobos.configured.ElementCodecConfig
 import ru.tinkoff.phobos.syntax.*
-import ru.tinkoff.phobos.encoding._
+import ru.tinkoff.phobos.encoding.*
 
 import scala.compiletime.*
 import scala.deriving.Mirror
 import scala.quoted.*
 import scala.deriving.*
 import scala.compiletime.{erasedValue, summonInline}
-
-case class TypeInfo(owner: String, short: String, typeParams: Iterable[TypeInfo]):
-  def full: String = s"$owner.$short"
 
 object encoder {
 
@@ -88,8 +85,6 @@ object encoder {
     }
   }
 
-  inline def deriveProduct[T](inline config: ElementCodecConfig): ElementEncoder[T] = ${deriveProductImpl('{config})}
-
   def deriveProductImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
     import quotes.reflect.*
     val tpe = TypeRepr.of[T]
@@ -97,7 +92,7 @@ object encoder {
 
     val groups = params.groupBy(_.category)
 
-    val x = '{new ElementEncoder[T]{
+    '{new ElementEncoder[T]{
       def encodeAsElement(a: T, sw: PhobosStreamWriter, localName: String, namespaceUri: Option[String]): Unit = {
         namespaceUri.fold(sw.writeStartElement(localName))(ns => sw.writeStartElement(ns, localName))
         $config.defineNamespaces.foreach { uri =>
@@ -130,7 +125,7 @@ object encoder {
         }
 
         ${
-          Expr.ofList(groups.getOrElse(ParamCategory.element, Nil).map { param =>
+          Expr.ofList((groups.getOrElse(ParamCategory.element, Nil) ::: groups.getOrElse(ParamCategory.default, Nil)).map { param =>
             param.paramType.asType match {
               case '[t] =>
                 '{summonInline[ElementEncoder[t]].encodeAsElement(
@@ -147,8 +142,6 @@ object encoder {
         sw.writeEndElement()
       }
     }}
-//    println(x.asTerm.show(using Printer.TreeAnsiCode))
-    x
   }
 
   def deriveSumImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
@@ -157,28 +150,47 @@ object encoder {
     val tpe = TypeRepr.of[T]
     val typeSymbol = tpe.typeSymbol
 
-    println(typeSymbol.children)
-
-    val alternatives = typeSymbol.children.map { child =>
-      tpe.select(child).asType match {
-        case '[t] =>
-          println('{??? match {
-            case x if x.isInstanceOf[t] => 123
-            case _ => 345
-          }}.asTerm.show(using Printer.TreeStructure))
-//          CaseDef(???, None, '{summonInline[ElementEncoder[t]]})
-      }
-    }
-
-//    println('{1 match {
-//      case 2 => 0
-//      case _: Int => 1
-//    }}.asTerm.show(using Printer.TreeStructure))
-
     '{
       new ElementEncoder[T] {
         def encodeAsElement(a: T, sw: PhobosStreamWriter, localName: String, namespaceUri: Option[String]): Unit = {
-          ${Match('{a}.asTerm, Nil).asExprOf[Unit]}
+          ${
+            Match(
+              '{a}.asTerm,
+              typeSymbol.children.map { child =>
+                TypeIdent(child).tpe.asType match {
+                  case '[t] =>
+                      val xmlName: Expr[String] = child.annotations.map(_.asExpr).collect {
+                        case '{discriminator($a)} => a
+                      } match {
+                        case Nil => '{$config.transformConstructorNames(${Expr(child.name)})}
+                        case List(value) => value
+                        case _ => throw new IllegalArgumentException("that's too much")
+                      }
+
+                      val sub = Symbol.newBind(Symbol.spliceOwner, "sub", Flags.EmptyFlags, TypeRepr.of[t])
+                      val encodeSub: Expr[Unit] = '{
+                        val instance = summonInline[ElementEncoder[t]]
+                        if ($config.useElementNameAsDiscriminator) {
+                          instance.encodeAsElement(
+                            ${Ref(sub).asExprOf[t]},
+                            sw,
+                            $xmlName,
+                            None,
+                          )
+                        } else {
+                          sw.memorizeDiscriminator(
+                            $config.discriminatorNamespace,
+                            $config.discriminatorLocalName,
+                            $xmlName,
+                          )
+                          instance.encodeAsElement(${Ref(sub).asExprOf[t]}, sw, localName, namespaceUri)
+                        }
+                      }
+                      CaseDef(Bind(sub, Typed(Ref(sub), TypeTree.of[t])), None, encodeSub.asTerm)
+                }
+              }
+            ).asExprOf[Unit]
+          }
         }
       }
     }
@@ -197,7 +209,6 @@ object encoder {
     } else if (typeSymbol.flags.is(Flags.Sealed)) {
       deriveSumImpl(config)
     } else {
-      println(typeSymbol.flags.show)
       throw new IllegalArgumentException("А это кто")
     }
   }

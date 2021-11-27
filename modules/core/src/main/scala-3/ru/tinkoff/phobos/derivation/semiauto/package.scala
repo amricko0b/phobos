@@ -20,10 +20,10 @@ package object semiauto {
     encoder.xml[T](localName, Some(Namespace[NS].getNamespace), ElementCodecConfig.default)
   inline def deriveXmlEncoderConfigured[T, NS: Namespace](localName: String, ns: NS, config: ElementCodecConfig): XmlEncoder[T] =
     encoder.xml[T](localName, Some(Namespace[NS].getNamespace), config)
-  def deriveElementDecoder[T]: ElementDecoder[T]                                                              = ???
-  def deriveElementDecoderConfigured[T](config: ElementCodecConfig): ElementDecoder[T]                        = ???
-  def deriveXmlDecoder[T](localName: String): XmlDecoder[T]                                                   = ???
-  def deriveXmlDecoderConfigured[T](localName: String, config: ElementCodecConfig): XmlDecoder[T]             = ???
-  def deriveXmlDecoder[T, NS](localName: String, ns: NS): XmlDecoder[T]                                       = ???
-  def deriveXmlDecoderConfigured[T, NS](localName: String, ns: NS, config: ElementCodecConfig): XmlDecoder[T] = ???
+  def deriveElementDecoder[T]: ElementDecoder[T]                                                              = null
+  def deriveElementDecoderConfigured[T](config: ElementCodecConfig): ElementDecoder[T]                        = null
+  def deriveXmlDecoder[T](localName: String): XmlDecoder[T]                                                   = null
+  def deriveXmlDecoderConfigured[T](localName: String, config: ElementCodecConfig): XmlDecoder[T]             = null
+  def deriveXmlDecoder[T, NS](localName: String, ns: NS): XmlDecoder[T]                                       = null
+  def deriveXmlDecoderConfigured[T, NS](localName: String, ns: NS, config: ElementCodecConfig): XmlDecoder[T] = null
 }
