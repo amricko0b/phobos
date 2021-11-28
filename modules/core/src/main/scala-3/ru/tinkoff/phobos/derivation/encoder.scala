@@ -13,84 +13,208 @@ import scala.compiletime.{erasedValue, summonInline}
 
 object encoder {
 
-  sealed trait ParamCategory
+  sealed trait FieldCategory
 
-  object ParamCategory {
-    case object element   extends ParamCategory
-    case object attribute extends ParamCategory
-    case object text      extends ParamCategory
-    case object default   extends ParamCategory
+  object FieldCategory {
+    case object element   extends FieldCategory
+    case object attribute extends FieldCategory
+    case object text      extends FieldCategory
+    case object default   extends FieldCategory
   }
 
-  final class CaseClassParam(using val quotes: Quotes)(
-                                   val localName: String,
-                                   val xmlName: Expr[String],
-                                   val namespaceUri: Expr[Option[String]],
-                                   val paramType: quotes.reflect.TypeRepr,
-                                   val category: ParamCategory,
-                                 )
+  final class CaseClassField(using val quotes: Quotes)(
+    val localName: String,
+    val xmlName: Expr[String], // Name of element or attribute
+    val namespaceUri: Expr[Option[String]],
+    val paramType: quotes.reflect.TypeRepr,
+    val category: FieldCategory,
+  )
 
-  final case class SealedTraitSubtype(
-                                       constructorName: String,
-                                       subtypeType: String,
-                                     )
+  final class SealedTraitChild(using val quotes: Quotes)(
+     val xmlName: Expr[String], // Value of discriminator
+     val subtypeType: quotes.reflect.TypeRepr,
+  )
 
-  def paramAnns[T: Type](config: Expr[ElementCodecConfig])(using Quotes): List[CaseClassParam] = {
+  // PRODUCT
+
+  private def extractFieldCategory(using Quotes)(
+    classSymbol: quotes.reflect.Symbol,
+    fieldSymbol: quotes.reflect.Symbol,
+    fieldAnnotations: List[Expr[Any]]
+  ): FieldCategory = {
     import quotes.reflect.*
+    fieldAnnotations
+      .collect {
+        case '{attr()}    => FieldCategory.attribute
+        case '{text()}    => FieldCategory.text
+        case '{default()} => FieldCategory.default
+      } match {
+      case Nil            => FieldCategory.element
+      case List(category) => category
+      case categories =>
+        val categoryAnnotations =
+          categories.collect {
+            case FieldCategory.attribute => "@attr"
+            case FieldCategory.text => "@text"
+            case FieldCategory.default => "@default"
+          }.mkString(", ")
 
-    val tpe = TypeRepr.of[T]
-
-    def filterAnnotation(a: Term): Boolean =
-      a.tpe.typeSymbol.maybeOwner.isNoSymbol ||
-        a.tpe.typeSymbol.owner.fullName != "scala.annotation.internal"
-
-    tpe.typeSymbol.primaryConstructor.paramSymss.flatten.map { field =>
-      val anns = field.annotations.filter(filterAnnotation).map(_.asExpr)
-
-      val cat: ParamCategory  = anns
-        .collect {
-          case '{attr()} => ParamCategory.attribute
-          case '{text()} => ParamCategory.text
-          case '{default()} => ParamCategory.default
-        } match {
-        case List(category) => category
-        case Nil            => ParamCategory.element
-        case categories => throw new IllegalArgumentException("BRRR")
-      }
-
-      val xmlName = (anns.collect {case '{renamed($a)} => a } match {
-        case Nil => None
-        case List(name) => Some(name)
-        case _ => throw new IllegalArgumentException("SHEESH")
-      }).getOrElse(cat match {
-          case ParamCategory.element => '{${config}.transformElementNames(${Expr(field.name)})}
-          case ParamCategory.attribute => '{${config}.transformAttributeNames(${Expr(field.name)})}
-          case _ =>    Expr(field.name)
-        })
-
-      val namespace: Expr[Option[String]]  =
-        anns.collect {
-          case '{xmlns($a: b)} =>
-          '{Some(summonInline[Namespace[b]].getNamespace)}
-        } match {
-          case Nil =>  cat match {
-            case ParamCategory.element => '{${config}.elementsDefaultNamespace}
-            case ParamCategory.attribute => '{${config}.attributesDefaultNamespace}
-            case _ => '{None}
-          }
-          case List(ns) => ns
-          case _ => throw new IllegalArgumentException("OOPPS")
-        }
-      CaseClassParam()(field.name, xmlName, namespace, tpe.memberType(field), cat)
+        report.throwError(
+          s"""
+             |Case class field cannot have more than one category annotation (@attr, @text or @default).
+             |Field '${fieldSymbol.name}' in case class '${classSymbol.name}' has ${categories.size}: $categoryAnnotations
+             |""".stripMargin
+        )
     }
   }
 
-  def deriveProductImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+  private def extractFieldXmlName(using Quotes)(
+    config: Expr[ElementCodecConfig],
+    classSymbol: quotes.reflect.Symbol,
+    fieldSymbol: quotes.reflect.Symbol,
+    fieldAnnotations: List[Expr[Any]],
+    fieldCategory: FieldCategory,
+  ): Expr[String] = {
     import quotes.reflect.*
-    val tpe = TypeRepr.of[T]
-    val params = paramAnns[T](config)
+    (fieldAnnotations.collect {case '{renamed($a)} => a } match {
+      case Nil        => None
+      case List(name) => Some(name)
+      case names =>
+        val renamedAnnotations = names.map(name => s"@renamed(${name.asTerm.show})").mkString(", ")
+        report.throwError(
+          s"""
+             |Case class field cannot have more than one @renamed annotation.
+             |Field '${fieldSymbol.name}' in case class '${classSymbol.name}' has ${names.size}: $renamedAnnotations
+             |""".stripMargin
+        )
+    }).getOrElse(fieldCategory match {
+      case FieldCategory.element   => '{${config}.transformElementNames(${Expr(fieldSymbol.name)})}
+      case FieldCategory.attribute => '{${config}.transformAttributeNames(${Expr(fieldSymbol.name)})}
+      case _                       => Expr(fieldSymbol.name)
+    })
+  }
 
-    val groups = params.groupBy(_.category)
+  private def extractFeildNamespace(using Quotes)(
+    config: Expr[ElementCodecConfig],
+    classSymbol: quotes.reflect.Symbol,
+    fieldSymbol: quotes.reflect.Symbol,
+    fieldAnnotations: List[Expr[Any]],
+    fieldCategory: FieldCategory,
+  ): Expr[Option[String]] = {
+    import quotes.reflect.*
+    fieldAnnotations.collect {
+      case '{xmlns($namespace: b)} => '{Some(summonInline[Namespace[b]].getNamespace)}
+    } match {
+      case Nil => fieldCategory match {
+        case FieldCategory.element   => '{${config}.elementsDefaultNamespace}
+        case FieldCategory.attribute => '{${config}.attributesDefaultNamespace}
+        case _ => '{None}
+      }
+      case List(namespace) => namespace
+      case namespaces =>
+        val xmlnsAnnotations =
+          fieldAnnotations
+            .collect {
+              case '{xmlns($namespace)} => s"@xmlns(${namespace.asTerm.show})"
+            }
+            .mkString(", ")
+        report.throwError(
+          s"""
+             |Case class field cannot have more than on @xmlns annotation.
+             |Field '${fieldSymbol.name}' in case class '${classSymbol.name}' has ${namespaces.size}: $xmlnsAnnotations
+             |""".stripMargin
+        )
+    }
+  }
+
+
+  private def extractCaseClassFields[T: Type](config: Expr[ElementCodecConfig])(using Quotes): List[CaseClassField] = {
+    import quotes.reflect.*
+
+    val classTypeRepr = TypeRepr.of[T]
+    val classSymbol = classTypeRepr.typeSymbol
+
+    classSymbol.primaryConstructor.paramSymss.flatten.map { fieldSymbol =>
+      val fieldAnnotations = fieldSymbol.annotations.map(_.asExpr)
+      val fieldCategory    = extractFieldCategory(classSymbol, fieldSymbol, fieldAnnotations)
+      val fieldXmlName     = extractFieldXmlName(config, classSymbol, fieldSymbol, fieldAnnotations, fieldCategory)
+      val fieldNamespace   = extractFeildNamespace(config, classSymbol, fieldSymbol, fieldAnnotations, fieldCategory)
+      CaseClassField()(fieldSymbol.name, fieldXmlName, fieldNamespace, classTypeRepr.memberType(fieldSymbol), fieldCategory)
+    }
+  }
+
+  private def encodeAttributes[T: Type](using Quotes)(
+    fields: List[CaseClassField],
+    sw: Expr[PhobosStreamWriter],
+    a: Expr[T]
+  ): Expr[List[Unit]] = {
+    import quotes.reflect.*
+    val classTypeRepr = TypeRepr.of[T]
+    val classSymbol = classTypeRepr.typeSymbol
+    Expr.ofList(fields.map{ field =>
+      field.paramType.asType match {
+        case '[t] => '{
+          summonInline[AttributeEncoder[t]].encodeAsAttribute(
+            ${Select(a.asTerm, classSymbol.declaredField(field.localName)).asExprOf[t]},
+            $sw,
+            ${field.xmlName},
+            ${field.namespaceUri}
+          )
+        }
+      }
+    })
+  }
+
+  private def encodeText[T: Type](using Quotes)(
+    fields: List[CaseClassField],
+    sw: Expr[PhobosStreamWriter],
+    a: Expr[T]
+  ): Expr[List[Unit]] = {
+    import quotes.reflect.*
+    val classTypeRepr = TypeRepr.of[T]
+    val classSymbol = classTypeRepr.typeSymbol
+
+    Expr.ofList(fields.map { field =>
+      field.paramType.asType match {
+        case '[t] => '{
+          summonInline[TextEncoder[t]]
+            .encodeAsText(${Select(a.asTerm, classSymbol.declaredField(field.localName)).asExprOf[t]}, $sw)
+        }
+      }
+    })
+  }
+
+  private def encodeElements[T: Type](using Quotes)(
+    fields: List[CaseClassField],
+    sw: Expr[PhobosStreamWriter],
+    a: Expr[T]
+  ): Expr[List[Unit]] = {
+    import quotes.reflect.*
+    val classTypeRepr = TypeRepr.of[T]
+    val classSymbol = classTypeRepr.typeSymbol
+
+    Expr.ofList(fields.map { field =>
+      field.paramType.asType match {
+        case '[t] => '{
+          summonInline[ElementEncoder[t]].encodeAsElement(
+            ${Select(a.asTerm, classSymbol.declaredField(field.localName)).asExprOf[t]},
+            $sw,
+            ${field.xmlName},
+            ${field.namespaceUri},
+          )
+        }
+      }
+    })
+  }
+
+
+  private def deriveProductImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+    import quotes.reflect.*
+    val classTypeRepr = TypeRepr.of[T]
+    val classSymbol = classTypeRepr.typeSymbol
+    val fields = extractCaseClassFields[T](config)
+
+    val groups = fields.groupBy(_.category)
 
     '{new ElementEncoder[T]{
       def encodeAsElement(a: T, sw: PhobosStreamWriter, localName: String, namespaceUri: Option[String]): Unit = {
@@ -99,56 +223,72 @@ object encoder {
           if (sw.getNamespaceContext.getPrefix(uri) == null) sw.writeNamespace(uri)
         }
 
-        ${
-          Expr.ofList(groups.getOrElse(ParamCategory.attribute, Nil).map{ param =>
-            param.paramType.asType match {
-              case '[t] =>
-                '{summonInline[AttributeEncoder[t]].encodeAsAttribute(
-                  ${Select('{a}.asTerm, tpe.typeSymbol.declaredField(param.localName)).asExprOf[t]},
-                  sw,
-                  ${param.xmlName},
-                  ${param.namespaceUri})
-                }
-            }
-          })
-        }
-
-        ${
-          Expr.ofList(groups.getOrElse(ParamCategory.text, Nil).map { param =>
-            param.paramType.asType match {
-              case '[t] =>
-                '{summonInline[TextEncoder[t]]
-                  .encodeAsText(${Select('{a}.asTerm, tpe.typeSymbol.declaredField(param.localName)).asExprOf[t]}, sw)
-                }
-            }
-          })
-        }
-
-        ${
-          Expr.ofList((groups.getOrElse(ParamCategory.element, Nil) ::: groups.getOrElse(ParamCategory.default, Nil)).map { param =>
-            param.paramType.asType match {
-              case '[t] =>
-                '{summonInline[ElementEncoder[t]].encodeAsElement(
-                    ${Select('{a}.asTerm, tpe.typeSymbol.declaredField(param.localName)).asExprOf[t]},
-                    sw,
-                    ${param.xmlName},
-                    ${param.namespaceUri},
-                  )
-                }
-            }
-          })
-        }
+        ${encodeAttributes[T](groups.getOrElse(FieldCategory.attribute, Nil), 'sw, 'a)}
+        ${encodeText[T](groups.getOrElse(FieldCategory.text, Nil), 'sw, 'a)}
+        ${encodeElements[T]((groups.getOrElse(FieldCategory.element, Nil) ::: groups.getOrElse(FieldCategory.default, Nil)), 'sw, 'a)}
 
         sw.writeEndElement()
       }
     }}
   }
 
-  def deriveSumImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+  // SUM
+
+  private def extractChildXmlName(using Quotes)(
+    config: Expr[ElementCodecConfig],
+    traitSymbol: quotes.reflect.Symbol,
+    childSymbol: quotes.reflect.Symbol,
+  ): Expr[String] = {
+    import quotes.reflect.*
+    childSymbol.annotations.map(_.asExpr).collect { case '{discriminator($a)} => a } match {
+      case Nil        => '{$config.transformConstructorNames(${Expr(childSymbol.name)})}
+      case List(name) => name
+      case names =>
+        val discriminatorAnnotations =
+          names.map(name => s"@discriminator(${name.show})")
+        report.throwError(
+          s"""
+             |Sealed trait child cannot have more than one @discriminator annotation.
+             |Field '${childSymbol.name}' in sealed trait '${traitSymbol.name}' has ${names.size}: $discriminatorAnnotations
+             |""".stripMargin
+        )
+    }
+  }
+
+  private def extractSealedTraitChildren[T: Type](config: Expr[ElementCodecConfig])(using Quotes): List[SealedTraitChild] = {
+    import quotes.reflect.*
+    val traitTypeRepr = TypeRepr.of[T]
+    val traitSymbol   = traitTypeRepr.typeSymbol
+
+    traitSymbol.children.map { childSymbol =>
+      val xmlName = extractChildXmlName(config, traitSymbol, childSymbol)
+      SealedTraitChild()(xmlName, TypeIdent(childSymbol).tpe)
+    }
+  }
+
+  private def encodeChild[T: Type](using Quotes)(
+    config: Expr[ElementCodecConfig],
+    child: SealedTraitChild,
+    childValue: Expr[T],
+    sw: Expr[PhobosStreamWriter],
+    localName: Expr[String],
+    namespaceUri: Expr[Option[String]],
+  ): Expr[Unit] = {
     import quotes.reflect.*
 
-    val tpe = TypeRepr.of[T]
-    val typeSymbol = tpe.typeSymbol
+    '{
+      val instance = summonInline[ElementEncoder[T]]
+      if ($config.useElementNameAsDiscriminator) {
+        instance.encodeAsElement(${childValue}, $sw, ${child.xmlName}, None)
+      } else {
+        $sw.memorizeDiscriminator($config.discriminatorNamespace, $config.discriminatorLocalName, ${child.xmlName})
+        instance.encodeAsElement(${childValue}, $sw, $localName, $namespaceUri)
+      }
+    }
+  }
+
+  private def deriveSumImpl[T: Type](config: Expr[ElementCodecConfig])(using Quotes): Expr[ElementEncoder[T]] = {
+    import quotes.reflect.*
 
     '{
       new ElementEncoder[T] {
@@ -156,37 +296,12 @@ object encoder {
           ${
             Match(
               '{a}.asTerm,
-              typeSymbol.children.map { child =>
-                TypeIdent(child).tpe.asType match {
+              extractSealedTraitChildren[T](config).map { child =>
+                child.subtypeType.asType match {
                   case '[t] =>
-                      val xmlName: Expr[String] = child.annotations.map(_.asExpr).collect {
-                        case '{discriminator($a)} => a
-                      } match {
-                        case Nil => '{$config.transformConstructorNames(${Expr(child.name)})}
-                        case List(value) => value
-                        case _ => throw new IllegalArgumentException("that's too much")
-                      }
-
-                      val sub = Symbol.newBind(Symbol.spliceOwner, "sub", Flags.EmptyFlags, TypeRepr.of[t])
-                      val encodeSub: Expr[Unit] = '{
-                        val instance = summonInline[ElementEncoder[t]]
-                        if ($config.useElementNameAsDiscriminator) {
-                          instance.encodeAsElement(
-                            ${Ref(sub).asExprOf[t]},
-                            sw,
-                            $xmlName,
-                            None,
-                          )
-                        } else {
-                          sw.memorizeDiscriminator(
-                            $config.discriminatorNamespace,
-                            $config.discriminatorLocalName,
-                            $xmlName,
-                          )
-                          instance.encodeAsElement(${Ref(sub).asExprOf[t]}, sw, localName, namespaceUri)
-                        }
-                      }
-                      CaseDef(Bind(sub, Typed(Ref(sub), TypeTree.of[t])), None, encodeSub.asTerm)
+                    val sub = Symbol.newBind(Symbol.spliceOwner, "sub", Flags.EmptyFlags, TypeRepr.of[t])
+                    val encode = encodeChild(config, child, Ref(sub).asExprOf[t], 'sw, 'localName, 'namespaceUri)
+                    CaseDef(Bind(sub, Typed(Ref(sub), TypeTree.of[t])), None, encode.asTerm)
                 }
               }
             ).asExprOf[Unit]
