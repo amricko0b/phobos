@@ -120,7 +120,7 @@ object encoder {
             .mkString(", ")
         report.throwError(
           s"""
-             |Case class field cannot have more than on @xmlns annotation.
+             |Case class field cannot have more than one @xmlns annotation.
              |Field '${fieldSymbol.name}' in case class '${classSymbol.name}' has ${namespaces.size}: $xmlnsAnnotations
              |""".stripMargin
         )
@@ -134,13 +134,30 @@ object encoder {
     val classTypeRepr = TypeRepr.of[T]
     val classSymbol = classTypeRepr.typeSymbol
 
-    classSymbol.primaryConstructor.paramSymss.flatten.map { fieldSymbol =>
+    val fields = classSymbol.primaryConstructor.paramSymss.flatten.map { fieldSymbol =>
       val fieldAnnotations = fieldSymbol.annotations.map(_.asExpr)
       val fieldCategory    = extractFieldCategory(classSymbol, fieldSymbol, fieldAnnotations)
       val fieldXmlName     = extractFieldXmlName(config, classSymbol, fieldSymbol, fieldAnnotations, fieldCategory)
       val fieldNamespace   = extractFeildNamespace(config, classSymbol, fieldSymbol, fieldAnnotations, fieldCategory)
       CaseClassField()(fieldSymbol.name, fieldXmlName, fieldNamespace, classTypeRepr.memberType(fieldSymbol), fieldCategory)
     }
+    val textCount    = fields.count(_.category == FieldCategory.text)
+    val defaultCount = fields.count(_.category == FieldCategory.default)
+    if (textCount > 1)
+      report.throwError(
+        s"""
+           |Case class cannot have more than one field with @text annotation.
+           |Case class '${classSymbol.name}' has $textCount
+           |""".stripMargin
+      )
+    if (defaultCount > 1)
+      report.throwError(
+        s"""
+           |Case class cannot have more than one field with @default annotation.
+           |Case class '${classSymbol.name}' has $defaultCount
+           |""".stripMargin
+      )
+    fields
   }
 
   private def encodeAttributes[T: Type](using Quotes)(
@@ -244,12 +261,11 @@ object encoder {
       case Nil        => '{$config.transformConstructorNames(${Expr(childSymbol.name)})}
       case List(name) => name
       case names =>
-        val discriminatorAnnotations =
-          names.map(name => s"@discriminator(${name.show})")
+        val discriminatorAnnotations = names.map(name => s"@discriminator(${name.show})").mkString(", ")
         report.throwError(
           s"""
              |Sealed trait child cannot have more than one @discriminator annotation.
-             |Field '${childSymbol.name}' in sealed trait '${traitSymbol.name}' has ${names.size}: $discriminatorAnnotations
+             |Child '${childSymbol.name}' of sealed trait '${traitSymbol.name}' has ${names.size}: $discriminatorAnnotations
              |""".stripMargin
         )
     }
@@ -299,9 +315,9 @@ object encoder {
               extractSealedTraitChildren[T](config).map { child =>
                 child.subtypeType.asType match {
                   case '[t] =>
-                    val sub = Symbol.newBind(Symbol.spliceOwner, "sub", Flags.EmptyFlags, TypeRepr.of[t])
-                    val encode = encodeChild(config, child, Ref(sub).asExprOf[t], 'sw, 'localName, 'namespaceUri)
-                    CaseDef(Bind(sub, Typed(Ref(sub), TypeTree.of[t])), None, encode.asTerm)
+                    val childValueSymbol = Symbol.newBind(Symbol.spliceOwner, "child", Flags.EmptyFlags, TypeRepr.of[t])
+                    val encode = encodeChild(config, child, Ref(childValueSymbol).asExprOf[t], 'sw, 'localName, 'namespaceUri)
+                    CaseDef(Bind(childValueSymbol, Typed(Ref(childValueSymbol), TypeTree.of[t])), None, encode.asTerm)
                 }
               }
             ).asExprOf[Unit]
@@ -324,7 +340,7 @@ object encoder {
     } else if (typeSymbol.flags.is(Flags.Sealed)) {
       deriveSumImpl(config)
     } else {
-      throw new IllegalArgumentException("А это кто")
+      report.throwError(s"${typeSymbol} is not a case class or sealed trait")
     }
   }
 
